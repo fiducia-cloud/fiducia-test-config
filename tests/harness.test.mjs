@@ -72,7 +72,9 @@ test("startServer injects the chosen port via portArgs (--port style)", async (t
 
   const server = await startServer({
     command: process.execPath,
-    args: ["-e", script],
+    // `--` so node stops parsing its own options and forwards --port to the script,
+    // mirroring how a real `astro preview` / `vite preview` receives --port.
+    args: ["-e", script, "--"],
     portArgs: (port) => ["--port", String(port)],
     cwd: process.cwd(),
     portRange: [23000, 23999],

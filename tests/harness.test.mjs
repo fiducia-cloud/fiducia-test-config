@@ -65,6 +65,27 @@ test("startServer reuses a *_TEST_URL env instead of spawning", async () => {
   }
 });
 
+test("startServer injects the chosen port via portArgs (--port style)", async (t) => {
+  const script =
+    "const http=require('http');const a=process.argv;const p=a[a.indexOf('--port')+1];" +
+    "http.createServer((_q,s)=>{s.writeHead(200);s.end('argport')}).listen(p,'127.0.0.1');";
+
+  const server = await startServer({
+    command: process.execPath,
+    // `--` so node stops parsing its own options and forwards --port to the script,
+    // mirroring how a real `astro preview` / `vite preview` receives --port.
+    args: ["-e", script, "--"],
+    portArgs: (port) => ["--port", String(port)],
+    cwd: process.cwd(),
+    portRange: [23000, 23999],
+    startupTimeoutMs: 15000,
+  });
+  t.after(() => server.stop());
+
+  const response = await fetch(server.url);
+  assert.equal(await response.text(), "argport");
+});
+
 test("startServer rejects when the server never becomes ready", async () => {
   await assert.rejects(
     startServer({

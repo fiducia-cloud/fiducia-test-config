@@ -65,6 +65,7 @@ function pickPort([low, high]) {
  * @param {Record<string,string>} [opts.env]   extra env (merged over process.env)
  * @param {string} [opts.readyPath]            path polled for a 2xx before resolving (default "/")
  * @param {string} [opts.portEnv]              env var the server reads its port from (default "PORT")
+ * @param {(port:number)=>string[]} [opts.portArgs]  build extra CLI args for the chosen port (e.g. p => ["--port", String(p)]); use for servers that take --port instead of $PORT
  * @param {[number,number]} [opts.portRange]   [inclusiveLow, exclusiveHigh) ephemeral port window
  * @param {string} [opts.reuseUrlEnv]          if set and present in env, reuse that URL instead of spawning
  * @param {number} [opts.startupTimeoutMs]     readiness deadline (default 60000)
@@ -77,6 +78,7 @@ export async function startServer({
   env = {},
   readyPath = "/",
   portEnv = "PORT",
+  portArgs,
   portRange = [19000, 20000],
   reuseUrlEnv,
   startupTimeoutMs = 60000,
@@ -91,7 +93,10 @@ export async function startServer({
   const port = pickPort(portRange);
   const url = `http://127.0.0.1:${port}`;
   const logs = [];
-  const child = spawn(command, args, {
+  // Some servers take their port via CLI (astro/vite preview: `--port N`) rather
+  // than $PORT. portArgs(port) lets a caller inject those args for the chosen port.
+  const spawnArgs = portArgs ? [...args, ...portArgs(port)] : args;
+  const child = spawn(command, spawnArgs, {
     cwd,
     env: { ...process.env, ...env, [portEnv]: String(port) },
     stdio: ["ignore", "pipe", "pipe"],

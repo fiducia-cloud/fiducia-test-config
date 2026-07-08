@@ -65,6 +65,7 @@ function pickPort([low, high]) {
  * @param {Record<string,string>} [opts.env]   extra env (merged over process.env)
  * @param {string} [opts.readyPath]            path polled for a 2xx before resolving (default "/")
  * @param {string} [opts.portEnv]              env var the server reads its port from (default "PORT")
+ * @param {(port:number)=>string[]} [opts.portArgs]  build extra CLI args for the chosen port (e.g. p => ["--port", String(p)]); use for servers that take --port instead of $PORT
  * @param {[number,number]} [opts.portRange]   [inclusiveLow, exclusiveHigh) ephemeral port window
  * @param {string} [opts.reuseUrlEnv]          if set and present in env, reuse that URL instead of spawning
  * @param {number} [opts.startupTimeoutMs]     readiness deadline (default 60000)

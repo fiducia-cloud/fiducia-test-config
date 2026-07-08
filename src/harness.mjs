@@ -77,6 +77,7 @@ export async function startServer({
   env = {},
   readyPath = "/",
   portEnv = "PORT",
+  portArgs,
   portRange = [19000, 20000],
   reuseUrlEnv,
   startupTimeoutMs = 60000,

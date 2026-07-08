@@ -92,7 +92,10 @@ export async function startServer({
   const port = pickPort(portRange);
   const url = `http://127.0.0.1:${port}`;
   const logs = [];
-  const child = spawn(command, args, {
+  // Some servers take their port via CLI (astro/vite preview: `--port N`) rather
+  // than $PORT. portArgs(port) lets a caller inject those args for the chosen port.
+  const spawnArgs = portArgs ? [...args, ...portArgs(port)] : args;
+  const child = spawn(command, spawnArgs, {
     cwd,
     env: { ...process.env, ...env, [portEnv]: String(port) },
     stdio: ["ignore", "pipe", "pipe"],

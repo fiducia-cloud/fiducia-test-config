@@ -1,0 +1,21 @@
+{
+  "name": "@fiducia/test-config",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared browser-test harness + config presets for fiducia.cloud. Exports config/helpers only — each repo keeps its own specs. Playwright and Puppeteer are used as libraries under node --test.",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs"
+  },
+  "exports": {
+    "./harness": "./src/harness.mjs",
+    "./assert": "./src/assert.mjs",
+    "./tsconfig": "./tsconfig.base.json",
+    "./eslint": "./eslint.config.base.mjs"
+  },
+  "files": [
+    "src",
+    "tsconfig.base.json",
+    "eslint.config.base.mjs"
+  ]
+}

@@ -1,3 +1,4 @@
+# CI: runs the harness self-tests (`node --test`) on push/PR.
 name: ci
 on:
   push:

@@ -1,3 +1,5 @@
+// Self-tests for the harness: exercise chromeExecutablePath and the startServer
+// lifecycle against a trivial Node HTTP server (no real browser required).
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { chromeExecutablePath, launchOptions, startServer } from "../src/harness.mjs";

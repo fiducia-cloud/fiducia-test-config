@@ -1,3 +1,4 @@
+# Dependabot config: weekly update PRs for npm and GitHub Actions dependencies.
 version: 2
 updates:
   - package-ecosystem: npm

@@ -48,6 +48,32 @@ test("startServer boots a server, serves readyPath, then stops it", async (t) =>
   await assert.rejects(fetch(`${server.url}/`)); // listener is gone
 });
 
+test("startServer stops descendant servers in the spawned process group", async (t) => {
+  const descendant =
+    "const http=require('http');" +
+    "http.createServer((_q,s)=>{s.writeHead(200);s.end('child')})" +
+    ".listen(process.env.PORT,'127.0.0.1');";
+  const wrapper =
+    "const {spawn}=require('child_process');" +
+    `spawn(process.execPath,['-e',${JSON.stringify(descendant)}],` +
+    "{env:process.env,stdio:'ignore'});" +
+    "setInterval(()=>{},10000);";
+
+  const server = await startServer({
+    command: process.execPath,
+    args: ["-e", wrapper],
+    cwd: process.cwd(),
+    readyPath: "/",
+    portRange: [24000, 24999],
+    startupTimeoutMs: 15000,
+  });
+  t.after(() => server.stop());
+
+  assert.equal(await (await fetch(server.url)).text(), "child");
+  await server.stop();
+  await assert.rejects(fetch(server.url));
+});
+
 test("startServer reuses a *_TEST_URL env instead of spawning", async () => {
   const previous = process.env.FIDUCIA_TEST_REUSE_URL;
   process.env.FIDUCIA_TEST_REUSE_URL = "http://reuse.example:1234/";
@@ -99,5 +125,16 @@ test("startServer rejects when the server never becomes ready", async () => {
       startupTimeoutMs: 1200,
     }),
     /timed out waiting for/,
+  );
+});
+
+test("startServer reports spawn failures without leaking an error event", async () => {
+  await assert.rejects(
+    startServer({
+      command: "fiducia-command-that-does-not-exist",
+      portRange: [25000, 25999],
+      startupTimeoutMs: 15000,
+    }),
+    /server failed to spawn.*ENOENT/s,
   );
 });

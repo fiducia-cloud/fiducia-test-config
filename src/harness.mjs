@@ -106,8 +106,9 @@ export async function startServer({
     cwd,
     env: { ...process.env, ...env, [portEnv]: String(port) },
     stdio: ["ignore", "pipe", "pipe"],
-    // A dedicated process group lets stop() terminate wrappers such as
-    // `cargo run` together with every application process they spawn.
+    // npm, cargo, and similar launchers create grandchildren for the real
+    // server. A dedicated process group lets stop() terminate the whole tree
+    // so no server or inherited stdio pipe is orphaned with the launcher.
     detached: process.platform !== "win32",
   });
 

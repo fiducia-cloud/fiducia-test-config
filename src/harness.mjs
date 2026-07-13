@@ -92,7 +92,13 @@ export async function startServer({
 
   const port = pickPort(portRange);
   const url = `http://127.0.0.1:${port}`;
-  const logs = [];
+  let logs = "";
+  let spawnError;
+  const appendLog = (chunk) => {
+    // Startup failures need useful context, but an unhealthy process must not
+    // grow the test runner without bound while readiness is pending.
+    logs = (logs + String(chunk)).slice(-64 * 1024);
+  };
   // Some servers take their port via CLI (astro/vite preview: `--port N`) rather
   // than $PORT. portArgs(port) lets a caller inject those args for the chosen port.
   const spawnArgs = portArgs ? [...args, ...portArgs(port)] : args;
@@ -105,11 +111,20 @@ export async function startServer({
     detached: process.platform !== "win32",
   });
 
-  child.stdout.on("data", (chunk) => logs.push(String(chunk)));
-  child.stderr.on("data", (chunk) => logs.push(String(chunk)));
+  child.stdout.on("data", appendLog);
+  child.stderr.on("data", appendLog);
+  child.once("error", (error) => {
+    spawnError = error;
+    appendLog(`${error}\n`);
+  });
 
   try {
-    await waitForHttp(`${url}${readyPath}`, child, logs, startupTimeoutMs);
+    await waitForHttp(
+      `${url}${readyPath}`,
+      child,
+      () => ({ logs, spawnError }),
+      startupTimeoutMs,
+    );
   } catch (error) {
     try {
       await terminateProcessTree(child);
@@ -191,11 +206,15 @@ async function terminateProcessTree(child) {
   throw new Error(`server process group ${child.pid} did not terminate`);
 }
 
-async function waitForHttp(url, child, logs, timeoutMs) {
+async function waitForHttp(url, child, state, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    const { logs, spawnError } = state();
+    if (spawnError) {
+      throw new Error(`server failed to spawn before ${url} was ready:\n${logs}`);
+    }
     if (child.exitCode !== null) {
-      throw new Error(`server exited before ${url} was ready:\n${logs.join("")}`);
+      throw new Error(`server exited before ${url} was ready:\n${logs}`);
     }
 
     try {
@@ -210,5 +229,5 @@ async function waitForHttp(url, child, logs, timeoutMs) {
     await delay(250);
   }
 
-  throw new Error(`timed out waiting for ${url}:\n${logs.join("")}`);
+  throw new Error(`timed out waiting for ${url}:\n${state().logs}`);
 }

@@ -17,8 +17,10 @@ and dependency-light. The only genuinely shared code is:
 - **`startServer()`** — boot a real app server on an ephemeral port, wait for a
   readiness path, return `{ url, stop }` (honors a `*_TEST_URL` env to reuse an
   already-running server in CI). On Unix the spawned command gets a dedicated
-  process group; `stop()` terminates wrappers and descendants together, waits
-  for verified exit, and remains retryable if cleanup fails.
+process group; `stop()` terminates wrappers and descendants together, waits
+for verified exit, and remains retryable if cleanup fails.
+Spawn failures are reported through the returned promise, and readiness logs
+are bounded so a noisy failed server cannot exhaust the test runner.
 - small assertion helpers and `tsconfig` / `eslint` presets.
 
 ## Consume it

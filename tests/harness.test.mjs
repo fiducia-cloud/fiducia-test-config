@@ -127,3 +127,14 @@ test("startServer rejects when the server never becomes ready", async () => {
     /timed out waiting for/,
   );
 });
+
+test("startServer reports spawn failures without leaking an error event", async () => {
+  await assert.rejects(
+    startServer({
+      command: "fiducia-command-that-does-not-exist",
+      portRange: [25000, 25999],
+      startupTimeoutMs: 15000,
+    }),
+    /server failed to spawn.*ENOENT/s,
+  );
+});

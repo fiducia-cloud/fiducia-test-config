@@ -100,6 +100,9 @@ export async function startServer({
     cwd,
     env: { ...process.env, ...env, [portEnv]: String(port) },
     stdio: ["ignore", "pipe", "pipe"],
+    // A dedicated process group lets stop() terminate wrappers such as
+    // `cargo run` together with every application process they spawn.
+    detached: process.platform !== "win32",
   });
 
   child.stdout.on("data", (chunk) => logs.push(String(chunk)));
@@ -108,28 +111,84 @@ export async function startServer({
   try {
     await waitForHttp(`${url}${readyPath}`, child, logs, startupTimeoutMs);
   } catch (error) {
-    child.kill("SIGTERM");
+    try {
+      await terminateProcessTree(child);
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "server startup and process cleanup failed",
+      );
+    }
     throw error;
   }
 
+  let stopped = false;
+  let stopPromise;
   return {
     url,
-    stop: async () => {
-      if (child.exitCode !== null || child.signalCode !== null) {
-        return;
-      }
-
-      child.kill("SIGTERM");
-      await Promise.race([
-        new Promise((resolveStop) => child.once("exit", resolveStop)),
-        delay(2500).then(() => {
-          if (child.exitCode === null && child.signalCode === null) {
-            child.kill("SIGKILL");
-          }
-        }),
-      ]);
+    stop: () => {
+      if (stopped) return Promise.resolve();
+      if (stopPromise) return stopPromise;
+      stopPromise = terminateProcessTree(child)
+        .then(() => {
+          stopped = true;
+        })
+        .finally(() => {
+          stopPromise = undefined;
+        });
+      return stopPromise;
     },
   };
+}
+
+function processTreeIsAlive(child) {
+  if (!child.pid) return false;
+  try {
+    if (process.platform === "win32") {
+      process.kill(child.pid, 0);
+    } else {
+      process.kill(-child.pid, 0);
+    }
+    return true;
+  } catch (error) {
+    if (error?.code === "ESRCH") return false;
+    if (error?.code === "EPERM") return true;
+    throw error;
+  }
+}
+
+function signalProcessTree(child, signal) {
+  if (!child.pid) return;
+  try {
+    if (process.platform === "win32") {
+      child.kill(signal);
+    } else {
+      process.kill(-child.pid, signal);
+    }
+  } catch (error) {
+    if (error?.code !== "ESRCH") throw error;
+  }
+}
+
+async function waitForProcessTreeExit(child, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (processTreeIsAlive(child) && Date.now() < deadline) {
+    await delay(25);
+  }
+  return !processTreeIsAlive(child);
+}
+
+/** Terminate the server's complete process group and verify that it is gone. */
+async function terminateProcessTree(child) {
+  if (!processTreeIsAlive(child)) return;
+
+  signalProcessTree(child, "SIGTERM");
+  if (await waitForProcessTreeExit(child, 2500)) return;
+
+  signalProcessTree(child, "SIGKILL");
+  if (await waitForProcessTreeExit(child, 2500)) return;
+
+  throw new Error(`server process group ${child.pid} did not terminate`);
 }
 
 async function waitForHttp(url, child, logs, timeoutMs) {

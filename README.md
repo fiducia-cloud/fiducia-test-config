@@ -16,7 +16,9 @@ and dependency-light. The only genuinely shared code is:
 - **`chromeExecutablePath()`** — find a system Chrome/Chromium for either driver.
 - **`startServer()`** — boot a real app server on an ephemeral port, wait for a
   readiness path, return `{ url, stop }` (honors a `*_TEST_URL` env to reuse an
-  already-running server in CI).
+  already-running server in CI). On Unix the spawned command gets a dedicated
+  process group; `stop()` terminates wrappers and descendants together, waits
+  for verified exit, and remains retryable if cleanup fails.
 - small assertion helpers and `tsconfig` / `eslint` presets.
 
 ## Consume it
@@ -77,8 +79,9 @@ import { startAdmin } from "./admin-browser-harness.mjs";
 ./shell npm test     # runs the harness self-tests (no browser needed)
 ```
 
-The harness self-tests boot a trivial Node HTTP server — they exercise the
-lifecycle without downloading a browser, so they run anywhere `node` runs.
+The harness self-tests boot trivial Node HTTP servers — including one behind a
+wrapper process — so process-group cleanup is exercised without downloading a
+browser and runs anywhere `node` runs.
 
 ## Security posture
 

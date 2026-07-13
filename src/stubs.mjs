@@ -341,6 +341,11 @@ export function fiduciaAuthStubEnv(stubSupabase, stubKv) {
     SUPABASE_AUTH_JWKS_URL: stubSupabase.jwksUrl,
     SUPABASE_SERVICE_ROLE_KEY: "stub-service-role-key",
     SUPABASE_PUBLISHABLE_KEY: "stub-publishable-key",
+    // Offline-only JWT verification (the recommended production posture for
+    // asymmetric-key projects): the remote /auth/v1/user fallback would accept
+    // token shapes GoTrue never actually mints (e.g. role=service_role WITH a
+    // sub), making negative-path tests nondeterministic.
+    SUPABASE_AUTH_ALLOW_REMOTE_USERINFO: "false",
     FIDUCIA_KV_URL: stubKv.url,
     FIDUCIA_JWT_SIGNING_KEY: generateP256PrivateKeyPem(),
   };

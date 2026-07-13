@@ -100,6 +100,10 @@ export async function startServer({
     cwd,
     env: { ...process.env, ...env, [portEnv]: String(port) },
     stdio: ["ignore", "pipe", "pipe"],
+    // npm and similar launchers create a grandchild for the real server. Give
+    // that tree its own POSIX process group so stop() cannot orphan the server
+    // (and its inherited stdio) after only terminating the launcher.
+    detached: process.platform !== "win32",
   });
 
   child.stdout.on("data", (chunk) => logs.push(String(chunk)));
@@ -108,7 +112,7 @@ export async function startServer({
   try {
     await waitForHttp(`${url}${readyPath}`, child, logs, startupTimeoutMs);
   } catch (error) {
-    child.kill("SIGTERM");
+    signalProcessTree(child, "SIGTERM");
     throw error;
   }
 
@@ -119,17 +123,31 @@ export async function startServer({
         return;
       }
 
-      child.kill("SIGTERM");
+      signalProcessTree(child, "SIGTERM");
       await Promise.race([
         new Promise((resolveStop) => child.once("exit", resolveStop)),
         delay(2500).then(() => {
           if (child.exitCode === null && child.signalCode === null) {
-            child.kill("SIGKILL");
+            signalProcessTree(child, "SIGKILL");
           }
         }),
       ]);
     },
   };
+}
+
+function signalProcessTree(child, signal) {
+  try {
+    if (process.platform !== "win32" && child.pid) {
+      process.kill(-child.pid, signal);
+    } else {
+      child.kill(signal);
+    }
+  } catch (error) {
+    if (error?.code !== "ESRCH") {
+      throw error;
+    }
+  }
 }
 
 async function waitForHttp(url, child, logs, timeoutMs) {

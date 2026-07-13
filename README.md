@@ -78,12 +78,19 @@ import { startAdmin } from "./admin-browser-harness.mjs";
 ## Develop
 
 ```sh
-./shell npm test     # runs the harness self-tests (no browser needed)
+./shell npm ci --ignore-scripts  # validates package-lock.json; installs no deps
+./shell npm test                # runs the self-tests (no browser needed)
 ```
 
 The harness self-tests boot trivial Node HTTP servers — including one behind a
 wrapper process — so process-group cleanup is exercised without downloading a
 browser and runs anywhere `node` runs.
+
+`package-lock.json` is tracked even though this package intentionally has no
+third-party dependencies. CI and the test image always use
+`npm ci --ignore-scripts`; there is no `npm install` fallback that could rewrite
+the lock or resolve a different graph. Any future dependency change must update
+both `package.json` and the lockfile deliberately.
 
 ## Security posture
 

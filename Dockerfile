@@ -1,9 +1,10 @@
-# Test image: runs the harness self-tests. No dependencies to install — the
-# harness uses only Node built-ins — so this is a thin, reproducible check.
+# Test image: runs the harness self-tests. The package has no third-party
+# dependencies, but npm ci still validates the tracked dependency lock.
 FROM node:22-slim
 
 WORKDIR /app
-COPY package.json ./
+COPY package.json package-lock.json ./
+RUN npm ci --ignore-scripts
 COPY src ./src
 COPY tests ./tests
 

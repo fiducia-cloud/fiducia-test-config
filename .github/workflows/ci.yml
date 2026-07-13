@@ -17,7 +17,7 @@ jobs:
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: "22"
-      # No package-lock.json here (the harness uses only Node built-ins), so
-      # `npm ci` has nothing to pin against; fall back to `npm install`.
-      - run: npm ci || npm install
+      # The package intentionally has no third-party dependencies, but the
+      # tracked lockfile still makes installation mode deterministic.
+      - run: npm ci --ignore-scripts
       - run: node --test tests/*.test.mjs

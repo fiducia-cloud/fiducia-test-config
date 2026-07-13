@@ -85,7 +85,26 @@ lifecycle without downloading a browser, so they run anywhere `node` runs.
 This package exports test **config and helpers only** — no credentials and no
 runtime/production code. `startServer()` boots local processes on ephemeral
 `127.0.0.1` ports for tests; `chromeExecutablePath()` only resolves a local
-browser binary. There are no secrets, `.env` files, or hardcoded tokens in the
-harness, and it declares no third-party runtime dependencies, so there is no
-dependency attack surface to audit. Any test credentials belong in the consuming
-repo's environment, never here.
+browser binary. There are no secrets or `.env` files in the harness, and it
+declares no third-party runtime dependencies, so there is no dependency attack
+surface to audit.
+
+The Supabase/Fiducia-KV stubs (`src/stubs.mjs`) are test-only by construction —
+keep these invariants when changing them:
+
+- **No committed key material.** The JWKS signing keypair and
+  `FIDUCIA_JWT_SIGNING_KEY` are generated fresh (`generateKeyPairSync`) on every
+  run; no private JWK or PEM is checked in, so nothing here can ever match a
+  production key.
+- **Obviously fake stub values.** The only hardcoded "keys"
+  (`stub-service-role-key`, `stub-publishable-key`) are `stub-`-prefixed
+  sentinels that no real Supabase project would accept; fixture passwords in
+  tests follow the same pattern (`operator-pw`). Never paste real-looking
+  (`sb_secret_…`, `sb_publishable_…`, `eyJ…`) values into fixtures.
+- **Can't point at production.** Stub servers bind to `127.0.0.1` on an
+  ephemeral port, and `fiduciaAuthStubEnv()` derives `SUPABASE_URL` /
+  issuer / JWKS URL from that loopback origin — no `*.supabase.co` URL or real
+  project ref appears anywhere in this repo (verified across git history).
+
+Real credentials belong in the consuming repo's environment (or its secret
+manager), never here.

@@ -79,3 +79,13 @@ import { startAdmin } from "./admin-browser-harness.mjs";
 
 The harness self-tests boot a trivial Node HTTP server — they exercise the
 lifecycle without downloading a browser, so they run anywhere `node` runs.
+
+## Security posture
+
+This package exports test **config and helpers only** — no credentials and no
+runtime/production code. `startServer()` boots local processes on ephemeral
+`127.0.0.1` ports for tests; `chromeExecutablePath()` only resolves a local
+browser binary. There are no secrets, `.env` files, or hardcoded tokens in the
+harness, and it declares no third-party runtime dependencies, so there is no
+dependency attack surface to audit. Any test credentials belong in the consuming
+repo's environment, never here.

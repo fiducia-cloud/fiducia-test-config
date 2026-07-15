@@ -1,6 +1,6 @@
 # Test image: runs the harness self-tests. The package has no third-party
 # dependencies, but npm ci still validates the tracked dependency lock.
-FROM node:26-slim@sha256:ffc78385a788964bb3cbab5e434ff79a10bdc25b8ae6db03fe5fe6cb14053c09
+FROM node:26-slim@sha256:715e55e4b84e4bb0ff48e49b398a848f08e55daed8eb6a0ea1839ae53bc57583
 
 WORKDIR /app
 COPY package.json package-lock.json ./

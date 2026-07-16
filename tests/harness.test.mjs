@@ -114,6 +114,33 @@ test("startServer injects the chosen port via portArgs (--port style)", async (t
   assert.equal(await response.text(), "argport");
 });
 
+test("stop() is retry-safe: repeated and concurrent calls settle without dangling processes", async () => {
+  const script =
+    "const http=require('http');" +
+    "http.createServer((_q,s)=>{s.writeHead(200);s.end('ok')})" +
+    ".listen(process.env.PORT,'127.0.0.1');";
+
+  const server = await startServer({
+    command: process.execPath,
+    args: ["-e", script],
+    cwd: process.cwd(),
+    readyPath: "/",
+    portRange: [26000, 26999],
+    startupTimeoutMs: 15000,
+  });
+  assert.equal((await fetch(server.url)).status, 200);
+
+  // Concurrent stops (a test body racing its own t.after cleanup) must both
+  // settle without throwing…
+  await Promise.all([server.stop(), server.stop()]);
+  // …and repeated stops after completion are cheap no-ops.
+  await server.stop();
+  await server.stop();
+
+  // Nothing is left listening on the port.
+  await assert.rejects(fetch(server.url));
+});
+
 test("startServer rejects when the server never becomes ready", async () => {
   await assert.rejects(
     startServer({

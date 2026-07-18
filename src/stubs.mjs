@@ -147,13 +147,55 @@ export async function startStubSupabase({
   // Resolved once the listener is up; token claims need the final origin.
   let issuer = "";
 
+  const normalizeFactor = (factor) => ({
+    id: factor.id ?? `factor-${randomBytes(6).toString("hex")}`,
+    // GoTrue's `GET /auth/v1/user` reports these three fields; supabase_auth.rs
+    // reads `factor_type`/`status` to decide which factor gates a login.
+    factor_type: factor.factor_type ?? "totp",
+    status: factor.status ?? "unverified",
+    friendly_name: factor.friendly_name ?? "Authenticator",
+  });
+
   const accounts = users.map((user) => ({
     id: user.id ?? `user-${randomBytes(6).toString("hex")}`,
     email: user.email.toLowerCase(),
+    phone: user.phone ? String(user.phone) : null,
     password: user.password,
     app_metadata: user.app_metadata ?? {},
     user_metadata: user.user_metadata ?? {},
+    // Enrolled MFA factors. Mutated in place by the factors API below so a spec
+    // can enroll → activate → step-up → disable against one live account.
+    factors: (user.factors ?? []).map(normalizeFactor),
   }));
+
+  // Open TOTP challenges: challenge_id -> { factorId, accountId }. A challenge is
+  // consumed by the matching `/verify` and is how enroll-activation and login
+  // step-up both redeem a code.
+  const challenges = new Map();
+
+  /** Resolve the account behind a `Bearer <access_token>`, or null. */
+  const accountFromBearer = (req) => {
+    const bearer = (req.headers.authorization ?? "").replace(/^Bearer /, "");
+    const claims = verifyEs256Jwt(publicKey, bearer);
+    if (!claims || claims.exp <= Math.floor(Date.now() / 1000)) {
+      return null;
+    }
+    return accounts.find((candidate) => candidate.id === claims.sub) ?? null;
+  };
+
+  const sessionResponse = (account, overrides = {}) => {
+    const refreshToken = randomBytes(16).toString("hex");
+    issuedRefreshTokens.set(refreshToken, account);
+    const now = Math.floor(Date.now() / 1000);
+    return {
+      access_token: signAccessToken(account, overrides),
+      token_type: "bearer",
+      expires_in: accessTokenTtlSeconds,
+      expires_at: now + accessTokenTtlSeconds,
+      refresh_token: refreshToken,
+      user: userJson(account),
+    };
+  };
 
   const signAccessToken = (user, overrides = {}) => {
     const now = Math.floor(Date.now() / 1000);

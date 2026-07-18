@@ -296,6 +296,138 @@ export async function startStubSupabase({
       return res.end();
     }
 
+    // ── Passwordless OTP (magic link / email + SMS one-time code) ──────────────
+    // `POST /auth/v1/otp` dispatches a code. Real GoTrue mails/texts it; the stub
+    // has nothing to send — the code is the fixed `otpCode`. Accept any plausible
+    // identifier (should_create_user is honored implicitly: unknown is fine).
+    if (req.method === "POST" && path === "/auth/v1/otp") {
+      const body = JSON.parse((await readBody(req)) || "{}");
+      if (!body.email && !body.phone) {
+        return sendJson(res, 400, {
+          error: "validation_failed",
+          error_description: "email or phone is required",
+        });
+      }
+      return sendJson(res, 200, { message_id: null });
+    }
+
+    // `POST /auth/v1/verify` redeems a one-time code for a session. The code must
+    // equal the fixed `otpCode`; the identifier must resolve to a known account.
+    if (req.method === "POST" && path === "/auth/v1/verify") {
+      const body = JSON.parse((await readBody(req)) || "{}");
+      const token = String(body.token ?? "");
+      if (token !== otpCode) {
+        return sendJson(res, 400, {
+          error: "otp_expired",
+          error_description: "Token has expired or is invalid",
+        });
+      }
+      const email = String(body.email ?? "").toLowerCase();
+      const phone = body.phone ? String(body.phone) : null;
+      const account = accounts.find((candidate) =>
+        email ? candidate.email === email : phone && candidate.phone === phone,
+      );
+      if (!account) {
+        return sendJson(res, 400, {
+          error: "otp_disabled",
+          error_description: "No account for that identifier",
+        });
+      }
+      return sendJson(res, 200, sessionResponse(account));
+    }
+
+    // ── Factors API (TOTP authenticator enrollment + step-up) ──────────────────
+    if (path.startsWith("/auth/v1/factors")) {
+      const account = accountFromBearer(req);
+      if (!account) {
+        return sendJson(res, 401, { message: "invalid JWT" });
+      }
+      const rest = path.slice("/auth/v1/factors".length); // "", "/{id}", "/{id}/challenge", "/{id}/verify"
+
+      // Enroll: POST /auth/v1/factors -> otpauth URI + shared secret + QR.
+      if (req.method === "POST" && rest === "") {
+        const body = JSON.parse((await readBody(req)) || "{}");
+        const factor = normalizeFactor({
+          factor_type: body.factor_type ?? "totp",
+          status: "unverified",
+          friendly_name: body.friendly_name ?? "Authenticator",
+        });
+        account.factors.push(factor);
+        // A stable, valid base32 test secret. Determinism over realism: any
+        // RFC-6238 app would accept it, but the stub verifies against totpCode.
+        const secret = "JBSWY3DPEHPK3PXP";
+        const uri = `otpauth://totp/Fiducia:${encodeURIComponent(
+          account.email,
+        )}?secret=${secret}&issuer=Fiducia&algorithm=SHA1&digits=6&period=30`;
+        return sendJson(res, 200, {
+          id: factor.id,
+          type: "totp",
+          friendly_name: factor.friendly_name,
+          totp: {
+            qr_code: "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg'/>",
+            secret,
+            uri,
+          },
+        });
+      }
+
+      const challengeMatch = rest.match(/^\/([^/]+)\/challenge$/);
+      const verifyMatch = rest.match(/^\/([^/]+)\/verify$/);
+      const factorMatch = rest.match(/^\/([^/]+)$/);
+
+      // Challenge: POST /auth/v1/factors/{id}/challenge -> a redeemable challenge.
+      if (req.method === "POST" && challengeMatch) {
+        const factorId = challengeMatch[1];
+        if (!account.factors.some((factor) => factor.id === factorId)) {
+          return sendJson(res, 404, { error: "factor_not_found" });
+        }
+        const challengeId = `challenge-${randomBytes(6).toString("hex")}`;
+        challenges.set(challengeId, { factorId, accountId: account.id });
+        return sendJson(res, 200, {
+          id: challengeId,
+          type: "totp",
+          expires_at: Math.floor(Date.now() / 1000) + 300,
+        });
+      }
+
+      // Verify: POST /auth/v1/factors/{id}/verify -> mark verified + step-up session.
+      if (req.method === "POST" && verifyMatch) {
+        const factorId = verifyMatch[1];
+        const body = JSON.parse((await readBody(req)) || "{}");
+        const code = String(body.code ?? "");
+        const challenge = challenges.get(String(body.challenge_id ?? ""));
+        if (!challenge || challenge.factorId !== factorId || challenge.accountId !== account.id) {
+          return sendJson(res, 400, { error: "challenge_not_found" });
+        }
+        if (code !== totpCode) {
+          return sendJson(res, 400, {
+            error: "invalid_code",
+            error_description: "Invalid TOTP code entered",
+          });
+        }
+        challenges.delete(String(body.challenge_id));
+        const factor = account.factors.find((candidate) => candidate.id === factorId);
+        if (factor) {
+          factor.status = "verified";
+        }
+        // aal2: the session is now stepped up past the second factor.
+        return sendJson(res, 200, sessionResponse(account, { claims: { aal: "aal2" } }));
+      }
+
+      // Unenroll: DELETE /auth/v1/factors/{id}.
+      if (req.method === "DELETE" && factorMatch) {
+        const factorId = factorMatch[1];
+        const before = account.factors.length;
+        account.factors = account.factors.filter((factor) => factor.id !== factorId);
+        if (account.factors.length === before) {
+          return sendJson(res, 404, { error: "factor_not_found" });
+        }
+        return sendJson(res, 200, { id: factorId });
+      }
+
+      return sendJson(res, 404, { message: `stub-supabase: no factors route for ${req.method} ${path}` });
+    }
+
     if (req.method === "GET" && path.startsWith("/rest/v1/")) {
       const table = path.slice("/rest/v1/".length);
       return sendJson(res, 200, table === "organizations" ? orgs : []);

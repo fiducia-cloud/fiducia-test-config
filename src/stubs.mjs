@@ -117,6 +117,16 @@ export function verifyEs256Jwt(publicKeyOrJwk, jwt) {
  * @param {Array<object>} [opts.orgs]  rows served from /rest/v1/organizations
  *   (fiducia-auth's org sync requires at least a reachable, possibly empty, table)
  * @param {number} [opts.accessTokenTtlSeconds]  default 3600
+ * @param {string} [opts.otpCode]  the fixed email/SMS one-time code the stub
+ *   accepts at `/auth/v1/verify` (default "123456"). Test-only determinism: real
+ *   GoTrue mails a random code; here every enrolled channel verifies with this one.
+ * @param {string} [opts.totpCode]  the fixed authenticator code the stub accepts
+ *   at `/auth/v1/factors/{id}/verify` (default "123456"). Lets a spec drive TOTP
+ *   enrollment/activation and aal1→aal2 step-up without RFC-6238 clock math.
+ *
+ * A user may carry a `factors` array (`{ id?, factor_type?, status?, friendly_name? }`)
+ * — seed one `{ factor_type: "totp", status: "verified" }` to make that account
+ * require TOTP step-up at login; omit it for a normal single-factor account.
  * @returns {Promise<{
  *   url: string, issuer: string, jwksUrl: string, jwk: object,
  *   signAccessToken: (user: object, overrides?: object) => string,
@@ -127,6 +137,8 @@ export async function startStubSupabase({
   users = [],
   orgs = [],
   accessTokenTtlSeconds = 3600,
+  otpCode = "123456",
+  totpCode = "123456",
 } = {}) {
   const { privateKey, publicKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
   const kid = randomBytes(8).toString("hex");
@@ -135,13 +147,55 @@ export async function startStubSupabase({
   // Resolved once the listener is up; token claims need the final origin.
   let issuer = "";
 
+  const normalizeFactor = (factor) => ({
+    id: factor.id ?? `factor-${randomBytes(6).toString("hex")}`,
+    // GoTrue's `GET /auth/v1/user` reports these three fields; supabase_auth.rs
+    // reads `factor_type`/`status` to decide which factor gates a login.
+    factor_type: factor.factor_type ?? "totp",
+    status: factor.status ?? "unverified",
+    friendly_name: factor.friendly_name ?? "Authenticator",
+  });
+
   const accounts = users.map((user) => ({
     id: user.id ?? `user-${randomBytes(6).toString("hex")}`,
     email: user.email.toLowerCase(),
+    phone: user.phone ? String(user.phone) : null,
     password: user.password,
     app_metadata: user.app_metadata ?? {},
     user_metadata: user.user_metadata ?? {},
+    // Enrolled MFA factors. Mutated in place by the factors API below so a spec
+    // can enroll → activate → step-up → disable against one live account.
+    factors: (user.factors ?? []).map(normalizeFactor),
   }));
+
+  // Open TOTP challenges: challenge_id -> { factorId, accountId }. A challenge is
+  // consumed by the matching `/verify` and is how enroll-activation and login
+  // step-up both redeem a code.
+  const challenges = new Map();
+
+  /** Resolve the account behind a `Bearer <access_token>`, or null. */
+  const accountFromBearer = (req) => {
+    const bearer = (req.headers.authorization ?? "").replace(/^Bearer /, "");
+    const claims = verifyEs256Jwt(publicKey, bearer);
+    if (!claims || claims.exp <= Math.floor(Date.now() / 1000)) {
+      return null;
+    }
+    return accounts.find((candidate) => candidate.id === claims.sub) ?? null;
+  };
+
+  const sessionResponse = (account, overrides = {}) => {
+    const refreshToken = randomBytes(16).toString("hex");
+    issuedRefreshTokens.set(refreshToken, account);
+    const now = Math.floor(Date.now() / 1000);
+    return {
+      access_token: signAccessToken(account, overrides),
+      token_type: "bearer",
+      expires_in: accessTokenTtlSeconds,
+      expires_at: now + accessTokenTtlSeconds,
+      refresh_token: refreshToken,
+      user: userJson(account),
+    };
+  };
 
   const signAccessToken = (user, overrides = {}) => {
     const now = Math.floor(Date.now() / 1000);
@@ -166,6 +220,9 @@ export async function startStubSupabase({
     email: account.email,
     app_metadata: account.app_metadata,
     user_metadata: account.user_metadata,
+    // GoTrue exposes enrolled factors on the user object; supabase_auth.rs reads
+    // `user.factors` (via GET /auth/v1/user) to decide login step-up.
+    factors: account.factors,
   });
 
   const server = createServer(async (req, res) => {
@@ -237,6 +294,138 @@ export async function startStubSupabase({
     if (req.method === "POST" && path === "/auth/v1/logout") {
       res.writeHead(204);
       return res.end();
+    }
+
+    // ── Passwordless OTP (magic link / email + SMS one-time code) ──────────────
+    // `POST /auth/v1/otp` dispatches a code. Real GoTrue mails/texts it; the stub
+    // has nothing to send — the code is the fixed `otpCode`. Accept any plausible
+    // identifier (should_create_user is honored implicitly: unknown is fine).
+    if (req.method === "POST" && path === "/auth/v1/otp") {
+      const body = JSON.parse((await readBody(req)) || "{}");
+      if (!body.email && !body.phone) {
+        return sendJson(res, 400, {
+          error: "validation_failed",
+          error_description: "email or phone is required",
+        });
+      }
+      return sendJson(res, 200, { message_id: null });
+    }
+
+    // `POST /auth/v1/verify` redeems a one-time code for a session. The code must
+    // equal the fixed `otpCode`; the identifier must resolve to a known account.
+    if (req.method === "POST" && path === "/auth/v1/verify") {
+      const body = JSON.parse((await readBody(req)) || "{}");
+      const token = String(body.token ?? "");
+      if (token !== otpCode) {
+        return sendJson(res, 400, {
+          error: "otp_expired",
+          error_description: "Token has expired or is invalid",
+        });
+      }
+      const email = String(body.email ?? "").toLowerCase();
+      const phone = body.phone ? String(body.phone) : null;
+      const account = accounts.find((candidate) =>
+        email ? candidate.email === email : phone && candidate.phone === phone,
+      );
+      if (!account) {
+        return sendJson(res, 400, {
+          error: "otp_disabled",
+          error_description: "No account for that identifier",
+        });
+      }
+      return sendJson(res, 200, sessionResponse(account));
+    }
+
+    // ── Factors API (TOTP authenticator enrollment + step-up) ──────────────────
+    if (path.startsWith("/auth/v1/factors")) {
+      const account = accountFromBearer(req);
+      if (!account) {
+        return sendJson(res, 401, { message: "invalid JWT" });
+      }
+      const rest = path.slice("/auth/v1/factors".length); // "", "/{id}", "/{id}/challenge", "/{id}/verify"
+
+      // Enroll: POST /auth/v1/factors -> otpauth URI + shared secret + QR.
+      if (req.method === "POST" && rest === "") {
+        const body = JSON.parse((await readBody(req)) || "{}");
+        const factor = normalizeFactor({
+          factor_type: body.factor_type ?? "totp",
+          status: "unverified",
+          friendly_name: body.friendly_name ?? "Authenticator",
+        });
+        account.factors.push(factor);
+        // A stable, valid base32 test secret. Determinism over realism: any
+        // RFC-6238 app would accept it, but the stub verifies against totpCode.
+        const secret = "JBSWY3DPEHPK3PXP";
+        const uri = `otpauth://totp/Fiducia:${encodeURIComponent(
+          account.email,
+        )}?secret=${secret}&issuer=Fiducia&algorithm=SHA1&digits=6&period=30`;
+        return sendJson(res, 200, {
+          id: factor.id,
+          type: "totp",
+          friendly_name: factor.friendly_name,
+          totp: {
+            qr_code: "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg'/>",
+            secret,
+            uri,
+          },
+        });
+      }
+
+      const challengeMatch = rest.match(/^\/([^/]+)\/challenge$/);
+      const verifyMatch = rest.match(/^\/([^/]+)\/verify$/);
+      const factorMatch = rest.match(/^\/([^/]+)$/);
+
+      // Challenge: POST /auth/v1/factors/{id}/challenge -> a redeemable challenge.
+      if (req.method === "POST" && challengeMatch) {
+        const factorId = challengeMatch[1];
+        if (!account.factors.some((factor) => factor.id === factorId)) {
+          return sendJson(res, 404, { error: "factor_not_found" });
+        }
+        const challengeId = `challenge-${randomBytes(6).toString("hex")}`;
+        challenges.set(challengeId, { factorId, accountId: account.id });
+        return sendJson(res, 200, {
+          id: challengeId,
+          type: "totp",
+          expires_at: Math.floor(Date.now() / 1000) + 300,
+        });
+      }
+
+      // Verify: POST /auth/v1/factors/{id}/verify -> mark verified + step-up session.
+      if (req.method === "POST" && verifyMatch) {
+        const factorId = verifyMatch[1];
+        const body = JSON.parse((await readBody(req)) || "{}");
+        const code = String(body.code ?? "");
+        const challenge = challenges.get(String(body.challenge_id ?? ""));
+        if (!challenge || challenge.factorId !== factorId || challenge.accountId !== account.id) {
+          return sendJson(res, 400, { error: "challenge_not_found" });
+        }
+        if (code !== totpCode) {
+          return sendJson(res, 400, {
+            error: "invalid_code",
+            error_description: "Invalid TOTP code entered",
+          });
+        }
+        challenges.delete(String(body.challenge_id));
+        const factor = account.factors.find((candidate) => candidate.id === factorId);
+        if (factor) {
+          factor.status = "verified";
+        }
+        // aal2: the session is now stepped up past the second factor.
+        return sendJson(res, 200, sessionResponse(account, { claims: { aal: "aal2" } }));
+      }
+
+      // Unenroll: DELETE /auth/v1/factors/{id}.
+      if (req.method === "DELETE" && factorMatch) {
+        const factorId = factorMatch[1];
+        const before = account.factors.length;
+        account.factors = account.factors.filter((factor) => factor.id !== factorId);
+        if (account.factors.length === before) {
+          return sendJson(res, 404, { error: "factor_not_found" });
+        }
+        return sendJson(res, 200, { id: factorId });
+      }
+
+      return sendJson(res, 404, { message: `stub-supabase: no factors route for ${req.method} ${path}` });
     }
 
     if (req.method === "GET" && path.startsWith("/rest/v1/")) {

@@ -220,6 +220,9 @@ export async function startStubSupabase({
     email: account.email,
     app_metadata: account.app_metadata,
     user_metadata: account.user_metadata,
+    // GoTrue exposes enrolled factors on the user object; supabase_auth.rs reads
+    // `user.factors` (via GET /auth/v1/user) to decide login step-up.
+    factors: account.factors,
   });
 
   const server = createServer(async (req, res) => {

@@ -210,6 +210,135 @@ test("rest serves the organizations table for fiducia-auth's org sync", async ()
   }
 });
 
+test("email OTP: /auth/v1/otp dispatches and /auth/v1/verify redeems the fixed code", async () => {
+  const stub = await startStubSupabase({ users: [CUSTOMER], otpCode: "424242" });
+  try {
+    const send = await fetch(`${stub.url}/auth/v1/otp`, {
+      method: "POST",
+      headers: { "content-type": "application/json", apikey: "anon-key" },
+      body: JSON.stringify({ email: CUSTOMER.email, should_create_user: true }),
+    });
+    assert.equal(send.status, 200);
+
+    // Wrong code is rejected; the fixed code mints a real session.
+    const wrong = await fetch(`${stub.url}/auth/v1/verify`, {
+      method: "POST",
+      headers: { "content-type": "application/json", apikey: "anon-key" },
+      body: JSON.stringify({ type: "email", email: CUSTOMER.email, token: "000000" }),
+    });
+    assert.equal(wrong.status, 400);
+
+    const verify = await fetch(`${stub.url}/auth/v1/verify`, {
+      method: "POST",
+      headers: { "content-type": "application/json", apikey: "anon-key" },
+      body: JSON.stringify({ type: "email", email: CUSTOMER.email, token: "424242" }),
+    });
+    assert.equal(verify.status, 200);
+    const session = await verify.json();
+    assert.ok(session.access_token, "verify issues an access token");
+    assert.equal(verifyEs256Jwt(stub.jwk, session.access_token).sub, CUSTOMER.id);
+  } finally {
+    await stub.stop();
+  }
+});
+
+test("factors API: enroll → challenge → verify marks TOTP verified and steps up to aal2", async () => {
+  const stub = await startStubSupabase({ users: [CUSTOMER], totpCode: "314159" });
+  try {
+    const grant = await (
+      await fetch(`${stub.url}/auth/v1/token?grant_type=password`, {
+        method: "POST",
+        headers: { "content-type": "application/json", apikey: "anon-key" },
+        body: JSON.stringify({ email: CUSTOMER.email, password: CUSTOMER.password }),
+      })
+    ).json();
+    const auth = { "content-type": "application/json", apikey: "anon-key", authorization: `Bearer ${grant.access_token}` };
+
+    const enroll = await (
+      await fetch(`${stub.url}/auth/v1/factors`, {
+        method: "POST",
+        headers: auth,
+        body: JSON.stringify({ factor_type: "totp", friendly_name: "iPhone" }),
+      })
+    ).json();
+    assert.ok(enroll.id, "enroll returns a factor id");
+    assert.ok(enroll.totp.secret, "enroll returns a shared secret");
+    assert.ok(enroll.totp.uri.startsWith("otpauth://totp/"), "enroll returns an otpauth URI");
+
+    // The freshly enrolled factor is reported unverified on the user object.
+    const before = await (await fetch(`${stub.url}/auth/v1/user`, { headers: auth })).json();
+    assert.equal(before.factors.find((f) => f.id === enroll.id).status, "unverified");
+
+    const challenge = await (
+      await fetch(`${stub.url}/auth/v1/factors/${enroll.id}/challenge`, { method: "POST", headers: auth })
+    ).json();
+    assert.ok(challenge.id, "challenge returns an id");
+
+    const badCode = await fetch(`${stub.url}/auth/v1/factors/${enroll.id}/verify`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ challenge_id: challenge.id, code: "999999" }),
+    });
+    assert.equal(badCode.status, 400, "a wrong TOTP code is rejected");
+
+    const verify = await fetch(`${stub.url}/auth/v1/factors/${enroll.id}/verify`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ challenge_id: challenge.id, code: "314159" }),
+    });
+    assert.equal(verify.status, 200);
+    assert.ok((await verify.json()).access_token, "verify returns a stepped-up session");
+
+    const after = await (await fetch(`${stub.url}/auth/v1/user`, { headers: auth })).json();
+    assert.equal(after.factors.find((f) => f.id === enroll.id).status, "verified");
+
+    // Unenroll removes it.
+    const remove = await fetch(`${stub.url}/auth/v1/factors/${enroll.id}`, { method: "DELETE", headers: auth });
+    assert.equal(remove.status, 200);
+    const gone = await (await fetch(`${stub.url}/auth/v1/user`, { headers: auth })).json();
+    assert.equal(gone.factors.find((f) => f.id === enroll.id), undefined);
+  } finally {
+    await stub.stop();
+  }
+});
+
+test("a seeded verified TOTP factor is reported by /auth/v1/user for login step-up", async () => {
+  const mfaUser = { ...CUSTOMER, id: "cust-mfa", email: "mfa@acme.com", factors: [{ factor_type: "totp", status: "verified", friendly_name: "Authy" }] };
+  const stub = await startStubSupabase({ users: [mfaUser] });
+  try {
+    const grant = await (
+      await fetch(`${stub.url}/auth/v1/token?grant_type=password`, {
+        method: "POST",
+        headers: { "content-type": "application/json", apikey: "anon-key" },
+        body: JSON.stringify({ email: mfaUser.email, password: mfaUser.password }),
+      })
+    ).json();
+    const me = await (
+      await fetch(`${stub.url}/auth/v1/user`, {
+        headers: { apikey: "anon-key", authorization: `Bearer ${grant.access_token}` },
+      })
+    ).json();
+    const verified = me.factors.filter((f) => f.factor_type === "totp" && f.status === "verified");
+    assert.equal(verified.length, 1, "the seeded verified TOTP factor gates login");
+  } finally {
+    await stub.stop();
+  }
+});
+
+test("factors API rejects an unauthenticated caller", async () => {
+  const stub = await startStubSupabase({ users: [CUSTOMER] });
+  try {
+    const anon = await fetch(`${stub.url}/auth/v1/factors`, {
+      method: "POST",
+      headers: { "content-type": "application/json", apikey: "anon-key" },
+      body: JSON.stringify({ factor_type: "totp" }),
+    });
+    assert.equal(anon.status, 401, "no bearer → 401, never a silent enroll");
+  } finally {
+    await stub.stop();
+  }
+});
+
 test("kv stub speaks fiducia-auth's store contract: get/put/CAS envelopes", async () => {
   const kv = await startStubFiduciaKv();
   try {

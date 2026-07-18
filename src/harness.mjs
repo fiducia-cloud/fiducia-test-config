@@ -92,7 +92,13 @@ export async function startServer({
 
   const port = pickPort(portRange);
   const url = `http://127.0.0.1:${port}`;
-  const logs = [];
+  let logs = "";
+  let spawnError;
+  const appendLog = (chunk) => {
+    // Startup failures need useful context, but an unhealthy process must not
+    // grow the test runner without bound while readiness is pending.
+    logs = (logs + String(chunk)).slice(-64 * 1024);
+  };
   // Some servers take their port via CLI (astro/vite preview: `--port N`) rather
   // than $PORT. portArgs(port) lets a caller inject those args for the chosen port.
   const spawnArgs = portArgs ? [...args, ...portArgs(port)] : args;
@@ -100,43 +106,116 @@ export async function startServer({
     cwd,
     env: { ...process.env, ...env, [portEnv]: String(port) },
     stdio: ["ignore", "pipe", "pipe"],
+    // npm, cargo, and similar launchers create grandchildren for the real
+    // server. A dedicated process group lets stop() terminate the whole tree
+    // so no server or inherited stdio pipe is orphaned with the launcher.
+    detached: process.platform !== "win32",
   });
 
-  child.stdout.on("data", (chunk) => logs.push(String(chunk)));
-  child.stderr.on("data", (chunk) => logs.push(String(chunk)));
+  child.stdout.on("data", appendLog);
+  child.stderr.on("data", appendLog);
+  child.once("error", (error) => {
+    spawnError = error;
+    appendLog(`${error}\n`);
+  });
 
   try {
-    await waitForHttp(`${url}${readyPath}`, child, logs, startupTimeoutMs);
+    await waitForHttp(
+      `${url}${readyPath}`,
+      child,
+      () => ({ logs, spawnError }),
+      startupTimeoutMs,
+    );
   } catch (error) {
-    child.kill("SIGTERM");
+    try {
+      await terminateProcessTree(child);
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "server startup and process cleanup failed",
+      );
+    }
     throw error;
   }
 
+  let stopped = false;
+  let stopPromise;
   return {
     url,
-    stop: async () => {
-      if (child.exitCode !== null || child.signalCode !== null) {
-        return;
-      }
-
-      child.kill("SIGTERM");
-      await Promise.race([
-        new Promise((resolveStop) => child.once("exit", resolveStop)),
-        delay(2500).then(() => {
-          if (child.exitCode === null && child.signalCode === null) {
-            child.kill("SIGKILL");
-          }
-        }),
-      ]);
+    stop: () => {
+      if (stopped) return Promise.resolve();
+      if (stopPromise) return stopPromise;
+      stopPromise = terminateProcessTree(child)
+        .then(() => {
+          stopped = true;
+        })
+        .finally(() => {
+          stopPromise = undefined;
+        });
+      return stopPromise;
     },
   };
 }
 
-async function waitForHttp(url, child, logs, timeoutMs) {
+function processTreeIsAlive(child) {
+  if (!child.pid) return false;
+  try {
+    if (process.platform === "win32") {
+      process.kill(child.pid, 0);
+    } else {
+      process.kill(-child.pid, 0);
+    }
+    return true;
+  } catch (error) {
+    if (error?.code === "ESRCH") return false;
+    if (error?.code === "EPERM") return true;
+    throw error;
+  }
+}
+
+function signalProcessTree(child, signal) {
+  if (!child.pid) return;
+  try {
+    if (process.platform === "win32") {
+      child.kill(signal);
+    } else {
+      process.kill(-child.pid, signal);
+    }
+  } catch (error) {
+    if (error?.code !== "ESRCH") throw error;
+  }
+}
+
+async function waitForProcessTreeExit(child, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (processTreeIsAlive(child) && Date.now() < deadline) {
+    await delay(25);
+  }
+  return !processTreeIsAlive(child);
+}
+
+/** Terminate the server's complete process group and verify that it is gone. */
+async function terminateProcessTree(child) {
+  if (!processTreeIsAlive(child)) return;
+
+  signalProcessTree(child, "SIGTERM");
+  if (await waitForProcessTreeExit(child, 2500)) return;
+
+  signalProcessTree(child, "SIGKILL");
+  if (await waitForProcessTreeExit(child, 2500)) return;
+
+  throw new Error(`server process group ${child.pid} did not terminate`);
+}
+
+async function waitForHttp(url, child, state, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    const { logs, spawnError } = state();
+    if (spawnError) {
+      throw new Error(`server failed to spawn before ${url} was ready:\n${logs}`);
+    }
     if (child.exitCode !== null) {
-      throw new Error(`server exited before ${url} was ready:\n${logs.join("")}`);
+      throw new Error(`server exited before ${url} was ready:\n${logs}`);
     }
 
     try {
@@ -151,5 +230,5 @@ async function waitForHttp(url, child, logs, timeoutMs) {
     await delay(250);
   }
 
-  throw new Error(`timed out waiting for ${url}:\n${logs.join("")}`);
+  throw new Error(`timed out waiting for ${url}:\n${state().logs}`);
 }

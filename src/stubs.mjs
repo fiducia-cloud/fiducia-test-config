@@ -117,6 +117,16 @@ export function verifyEs256Jwt(publicKeyOrJwk, jwt) {
  * @param {Array<object>} [opts.orgs]  rows served from /rest/v1/organizations
  *   (fiducia-auth's org sync requires at least a reachable, possibly empty, table)
  * @param {number} [opts.accessTokenTtlSeconds]  default 3600
+ * @param {string} [opts.otpCode]  the fixed email/SMS one-time code the stub
+ *   accepts at `/auth/v1/verify` (default "123456"). Test-only determinism: real
+ *   GoTrue mails a random code; here every enrolled channel verifies with this one.
+ * @param {string} [opts.totpCode]  the fixed authenticator code the stub accepts
+ *   at `/auth/v1/factors/{id}/verify` (default "123456"). Lets a spec drive TOTP
+ *   enrollment/activation and aal1→aal2 step-up without RFC-6238 clock math.
+ *
+ * A user may carry a `factors` array (`{ id?, factor_type?, status?, friendly_name? }`)
+ * — seed one `{ factor_type: "totp", status: "verified" }` to make that account
+ * require TOTP step-up at login; omit it for a normal single-factor account.
  * @returns {Promise<{
  *   url: string, issuer: string, jwksUrl: string, jwk: object,
  *   signAccessToken: (user: object, overrides?: object) => string,
@@ -127,6 +137,8 @@ export async function startStubSupabase({
   users = [],
   orgs = [],
   accessTokenTtlSeconds = 3600,
+  otpCode = "123456",
+  totpCode = "123456",
 } = {}) {
   const { privateKey, publicKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
   const kid = randomBytes(8).toString("hex");

@@ -9,15 +9,26 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
-          node-version: "22"
-      # No package-lock.json here (the harness uses only Node built-ins), so
-      # `npm ci` has nothing to pin against; fall back to `npm install`.
-      - run: npm ci || npm install
+          persist-credentials: false
+      - name: Validate GitHub Actions
+        uses: docker://rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+        with:
+          args: ./.github/workflows/ci.yml
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22.22.1"
+      # The package intentionally has no third-party dependencies, but the
+      # tracked lockfile still makes installation mode deterministic.
+      - run: npm ci --ignore-scripts
       - run: node --test tests/*.test.mjs

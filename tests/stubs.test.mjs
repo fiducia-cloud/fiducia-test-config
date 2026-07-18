@@ -142,6 +142,51 @@ test("signAccessToken overrides support negative-path tokens (expired, wrong rol
   }
 });
 
+test("identity stub fails closed: missing, expired, and forged tokens are 401; only the real one passes", async (t) => {
+  // If the harness's own identity service accepted a bad token, every
+  // downstream auth test built on it would be vacuous.
+  const stub = await startStubSupabase({ users: [CUSTOMER] });
+  const imposter = await startStubSupabase({ users: [CUSTOMER] }); // same user, DIFFERENT signing key
+  t.after(async () => {
+    await stub.stop();
+    await imposter.stop();
+  });
+
+  const me = (token) =>
+    fetch(`${stub.url}/auth/v1/user`, {
+      headers: {
+        apikey: "anon-key",
+        ...(token === undefined ? {} : { authorization: `Bearer ${token}` }),
+      },
+    });
+
+  // No token at all.
+  assert.equal((await me(undefined)).status, 401);
+
+  // Expired but genuinely signed token.
+  const expired = stub.signAccessToken(CUSTOMER, {
+    claims: { exp: Math.floor(Date.now() / 1000) - 60 },
+  });
+  assert.equal((await me(expired)).status, 401);
+
+  // Forged token: valid ES256 signature, correct claims, WRONG key.
+  const forged = imposter.signAccessToken(CUSTOMER);
+  assert.equal((await me(forged)).status, 401, "a token signed by a foreign key must be rejected");
+
+  // Tampered payload over a genuine signature.
+  const genuine = stub.signAccessToken(CUSTOMER);
+  const [head, body, sig] = genuine.split(".");
+  const swollen = JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
+  swollen.app_metadata = { orgs: ["org_infra"], roles: ["admin"] };
+  const tampered = `${head}.${Buffer.from(JSON.stringify(swollen)).toString("base64url")}.${sig}`;
+  assert.equal((await me(tampered)).status, 401);
+
+  // The configured token still passes — fail-closed, not fail-always.
+  const accepted = await me(genuine);
+  assert.equal(accepted.status, 200);
+  assert.equal((await accepted.json()).id, CUSTOMER.id);
+});
+
 test("rest serves the organizations table for fiducia-auth's org sync", async () => {
   const stub = await startStubSupabase({
     orgs: [{ id: "org_acme", plan: "pro" }],

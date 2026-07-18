@@ -16,7 +16,11 @@ and dependency-light. The only genuinely shared code is:
 - **`chromeExecutablePath()`** — find a system Chrome/Chromium for either driver.
 - **`startServer()`** — boot a real app server on an ephemeral port, wait for a
   readiness path, return `{ url, stop }` (honors a `*_TEST_URL` env to reuse an
-  already-running server in CI).
+  already-running server in CI). On Unix the spawned command gets a dedicated
+process group; `stop()` terminates wrappers and descendants together, waits
+for verified exit, and remains retryable if cleanup fails.
+Spawn failures are reported through the returned promise, and readiness logs
+are bounded so a noisy failed server cannot exhaust the test runner.
 - small assertion helpers and `tsconfig` / `eslint` presets.
 
 ## Consume it
@@ -74,11 +78,19 @@ import { startAdmin } from "./admin-browser-harness.mjs";
 ## Develop
 
 ```sh
-./shell npm test     # runs the harness self-tests (no browser needed)
+./shell npm ci --ignore-scripts  # validates package-lock.json; installs no deps
+./shell npm test                # runs the self-tests (no browser needed)
 ```
 
-The harness self-tests boot a trivial Node HTTP server — they exercise the
-lifecycle without downloading a browser, so they run anywhere `node` runs.
+The harness self-tests boot trivial Node HTTP servers — including one behind a
+wrapper process — so process-group cleanup is exercised without downloading a
+browser and runs anywhere `node` runs.
+
+`package-lock.json` is tracked even though this package intentionally has no
+third-party dependencies. CI and the test image always use
+`npm ci --ignore-scripts`; there is no `npm install` fallback that could rewrite
+the lock or resolve a different graph. Any future dependency change must update
+both `package.json` and the lockfile deliberately.
 
 ## Security posture
 

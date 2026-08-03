@@ -11,6 +11,7 @@
     "./harness": "./src/harness.mjs",
     "./assert": "./src/assert.mjs",
     "./stubs": "./src/stubs.mjs",
+    "./shared-auth-stub": "./src/shared-auth-stub.mjs",
     "./tsconfig": "./tsconfig.base.json",
     "./eslint": "./eslint.config.base.mjs"
   },

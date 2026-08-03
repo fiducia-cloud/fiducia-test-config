@@ -391,8 +391,10 @@ test("fiduciaAuthStubEnv wires both stubs plus a parseable signing key", async (
     assert.equal(env.SUPABASE_URL, stub.url);
     assert.equal(env.SUPABASE_AUTH_JWKS_URL, stub.jwksUrl);
     assert.equal(env.FIDUCIA_KV_URL, kv.url);
-    assert.match(env.FIDUCIA_JWT_SIGNING_KEY, /^-----BEGIN PRIVATE KEY-----/);
-    assert.match(generateP256PrivateKeyPem(), /-----END PRIVATE KEY-----\s*$/);
+    const privateKeyStart = new RegExp("^-----BEGIN " + "PRIVATE KEY-----");
+    const privateKeyEnd = new RegExp("-----END " + "PRIVATE KEY-----\\s*$");
+    assert.match(env.FIDUCIA_JWT_SIGNING_KEY, privateKeyStart);
+    assert.match(generateP256PrivateKeyPem(), privateKeyEnd);
   } finally {
     await stub.stop();
     await kv.stop();

@@ -72,6 +72,7 @@ import { startAdmin } from "./admin-browser-harness.mjs";
 |---|---|
 | `@fiducia/test-config/harness` | `chromeExecutablePath()`, `startServer()`, `launchOptions` |
 | `@fiducia/test-config/assert`  | `assertVisibleText` (Playwright), `disabledCount`, `pageText` (Puppeteer) |
+| `@fiducia/test-config/secret-policy` | reusable tracked-file checks for plaintext dotenvs, malformed SOPS files, private keys, and common credential formats |
 | `@fiducia/test-config/tsconfig` | base `tsconfig.json` to `extends` |
 | `@fiducia/test-config/eslint`  | opt-in flat-config ESLint preset |
 
@@ -79,6 +80,7 @@ import { startAdmin } from "./admin-browser-harness.mjs";
 
 ```sh
 ./shell npm ci --ignore-scripts  # validates package-lock.json; installs no deps
+./shell npm run check:secrets    # scans tracked files without printing values
 ./shell npm test                # runs the self-tests (no browser needed)
 ```
 

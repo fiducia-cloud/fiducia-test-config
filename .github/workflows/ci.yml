@@ -31,4 +31,5 @@ jobs:
       # The package intentionally has no third-party dependencies, but the
       # tracked lockfile still makes installation mode deterministic.
       - run: npm ci --ignore-scripts
+      - run: npm run check:secrets
       - run: node --test tests/*.test.mjs

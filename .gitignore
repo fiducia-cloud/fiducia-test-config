@@ -6,6 +6,11 @@ __pycache__/
 .env
 .env.*
 !.env.example
+!secrets/**/*.sops.env
+*.agekey
+*.age-key
+sops-private*.txt
+keys/
 *.log
 .DS_Store
 

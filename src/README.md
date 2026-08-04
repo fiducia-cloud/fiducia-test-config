@@ -1,5 +1,9 @@
 # src
 
+`secret-policy.mjs` provides the dependency-free repository scanner used by
+CI and available to consuming Fiducia repositories through the
+`@fiducia/test-config/secret-policy` export.
+
 The shared, framework-agnostic test helpers published as `@fiducia/test-config`.
 Deliberately minimal: every consuming repo keeps its own specs; this package only
 provides the small pieces that are genuinely common.

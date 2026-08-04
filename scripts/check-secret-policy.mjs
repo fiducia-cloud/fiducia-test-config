@@ -12,13 +12,27 @@ function parseRoot(argv) {
   return resolve(argv[index + 1]);
 }
 
+function displayPath(path) {
+  return path.replace(
+    /[\u0000-\u001f\u007f]/gu,
+    (character) =>
+      `\\x${character.codePointAt(0).toString(16).padStart(2, "0")}`,
+  );
+}
+
 const findings = await scanTrackedRepository(parseRoot(process.argv.slice(2)));
 if (findings.length === 0) {
-  process.stdout.write("secret policy OK: tracked files contain no prohibited plaintext material\n");
+  process.stdout.write(
+    "secret policy OK: tracked files contain no prohibited plaintext material\n",
+  );
 } else {
   for (const item of findings) {
-    process.stderr.write(`${item.path}: ${item.rule}: ${item.detail}\n`);
+    process.stderr.write(
+      `${displayPath(item.path)}: ${item.rule}: ${item.detail}\n`,
+    );
   }
-  process.stderr.write(`secret policy FAIL: ${findings.length} finding(s); values were not printed\n`);
+  process.stderr.write(
+    `secret policy FAIL: ${findings.length} finding(s); values were not printed\n`,
+  );
   process.exitCode = 1;
 }

@@ -1,0 +1,24 @@
+[package]
+org = "fiducia-cloud"
+name = "fiducia-test-config"
+version = "0.1.0"
+description = "Private shared browser-test harness, stubs, assertions, and config presets for Fiducia repositories"
+license = "UNLICENSED"
+keywords = ["testing", "playwright", "puppeteer", "harness", "nodejs"]
+language = "nodejs"
+
+[package.repository]
+vcs = "git"
+url = "https://github.com/fiducia-cloud/fiducia-test-config"
+
+[publish]
+include_readme = true
+tag_format = "v{version}"
+smoke_test = "test -f \"$ZED_PKG_TEST_TARGET/src/harness.mjs\" && node --check \"$ZED_PKG_TEST_TARGET/src/harness.mjs\" && node --check \"$ZED_PKG_TEST_TARGET/src/assert.mjs\""
+exclude = [".env", ".env.*", ".direnv/**", ".zed/**", ".zed-pack/**", ".vendor/.zed/**", "tmp/**", "**/*.log", ".DS_Store", "node_modules/**"]
+
+[install]
+adapter = "node"
+
+[scripts]
+test = "npm test"

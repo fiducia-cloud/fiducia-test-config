@@ -1,5 +1,5 @@
 [package]
-org = "fiducia"
+org = "fiducia-cloud"
 name = "fiducia-test-config"
 version = "0.1.0"
 description = "Private shared browser-test harness, stubs, assertions, and config presets for Fiducia repositories"
@@ -15,7 +15,7 @@ url = "https://github.com/fiducia-cloud/fiducia-test-config"
 include_readme = true
 tag_format = "v{version}"
 smoke_test = "test -f \"$ZED_PKG_TEST_TARGET/src/harness.mjs\" && node --check \"$ZED_PKG_TEST_TARGET/src/harness.mjs\" && node --check \"$ZED_PKG_TEST_TARGET/src/assert.mjs\""
-exclude = [".env", ".env.*", ".direnv/**", ".zed/**", ".zed-pack/**", "tmp/**", "**/*.log", ".DS_Store", "node_modules/**"]
+exclude = [".env", ".env.*", ".direnv/**", ".zed/**", ".zed-pack/**", ".vendor/.zed/**", "tmp/**", "**/*.log", ".DS_Store", "node_modules/**"]
 
 [install]
 adapter = "node"

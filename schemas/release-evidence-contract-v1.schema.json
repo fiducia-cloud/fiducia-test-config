@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/fiducia-cloud/fiducia-test-config/schemas/release-evidence-contract-v1.schema.json",
+  "title": "Fiducia immutable release and evidence contract v1",
+  "oneOf": [
+    {"$ref": "#/$defs/releaseManifest"},
+    {"$ref": "#/$defs/evidenceBundle"}
+  ],
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "releaseManifest": {
+      "type": "object",
+      "required": ["schema", "release_id", "source", "artifacts", "interfaces", "migrations", "feature_gates", "topology"],
+      "properties": {
+        "schema": {"const": "fiducia.release-manifest/v1"},
+        "release_id": {"type": "string", "minLength": 1},
+        "source": {
+          "type": "object",
+          "required": ["repository", "commit_sha"],
+          "properties": {
+            "repository": {"type": "string", "pattern": "^[^/\\s]+/[^/\\s]+$"},
+            "commit_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+          },
+          "additionalProperties": false
+        },
+        "artifacts": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["kind", "name", "digest"],
+            "properties": {
+              "kind": {"enum": ["oci", "package", "binary", "bundle", "migration"]},
+              "name": {"type": "string", "minLength": 1},
+              "digest": {"$ref": "#/$defs/digest"},
+              "version": {"type": ["string", "null"]},
+              "source": {"type": ["string", "null"]}
+            },
+            "additionalProperties": true
+          }
+        },
+        "interfaces": {"type": "object", "minProperties": 1, "additionalProperties": {"type": "string", "minLength": 1}},
+        "migrations": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "feature_gates": {"type": "object", "additionalProperties": {"type": ["boolean", "string", "number"]}},
+        "topology": {"type": "object", "minProperties": 1}
+      },
+      "additionalProperties": false
+    },
+    "evidenceBundle": {
+      "type": "object",
+      "required": ["schema", "run_id", "outcome", "release_manifest_sha256", "deterministic_seed", "environment_hash", "config_hash", "assertions", "junit", "timeline", "trace_ids", "metrics", "failure_classification", "cleanup", "signature"],
+      "properties": {
+        "schema": {"const": "fiducia.evidence-bundle/v1"},
+        "run_id": {"type": "string", "minLength": 1},
+        "outcome": {"enum": ["passed", "failed", "blocked"]},
+        "release_manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "deterministic_seed": {"type": ["integer", "string"]},
+        "environment_hash": {"$ref": "#/$defs/digest"},
+        "config_hash": {"$ref": "#/$defs/digest"},
+        "assertions": {"type": "object", "required": ["passed", "failed", "skipped"], "properties": {"passed": {"type": "integer", "minimum": 0}, "failed": {"type": "integer", "minimum": 0}, "skipped": {"type": "integer", "minimum": 0}}},
+        "junit": {"type": "array", "items": {"type": "object"}},
+        "timeline": {"type": "array", "items": {"type": "object"}},
+        "trace_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "metrics": {"type": "array", "items": {"type": "object"}},
+        "failure_classification": {"type": ["string", "null"]},
+        "blocked_reason": {"type": ["string", "null"]},
+        "requires_credentials": {"type": "boolean"},
+        "cleanup": {
+          "type": "object",
+          "required": ["status", "completed_at"],
+          "properties": {
+            "status": {"enum": ["clean", "failed", "quarantined"]},
+            "completed_at": {"type": "string", "format": "date-time"}
+          },
+          "additionalProperties": true
+        },
+        "signature": {
+          "type": "object",
+          "required": ["algorithm", "key_id", "signed_digest"],
+          "properties": {
+            "algorithm": {"type": "string", "minLength": 1},
+            "key_id": {"type": "string", "minLength": 1},
+            "signed_digest": {"$ref": "#/$defs/digest"}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

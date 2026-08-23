@@ -49,3 +49,11 @@ tmp
 temp
 tmp/worktrees
 temp/worktrees
+
+# ores-sops dotenv hardening: plaintext dotenv is local-only at every depth;
+# only env/enc/*.env.enc (sops ciphertext) is tracked. See env/README.md.
+**/**/*.env
+env/dec
+# Re-assert the narrow, pre-existing exception above so the broad rules do not
+# swallow it (deny by default, permit narrowly).
+!secrets/**/*.sops.env

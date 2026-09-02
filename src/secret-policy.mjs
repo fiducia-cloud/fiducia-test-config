@@ -3,8 +3,11 @@ import { lstat, readFile } from "node:fs/promises";
 import { basename, isAbsolute, relative, resolve, sep } from "node:path";
 
 const MAX_SCANNED_BYTES = 1024 * 1024;
-const SOPS_SUFFIX = /\.sops\.(?:env|json|ya?ml|ini)$/u;
-const APPROVED_SOPS_PATH = /^secrets\/.+\.sops\.env$/u;
+const LEGACY_SOPS_SUFFIX = /\.sops\.(?:env|json|ya?ml|ini)$/u;
+const ENV_CIPHERTEXT_SUFFIX = /\.env\.enc$/u;
+const SOPS_CONFIG = /^\.sops\.ya?ml$/u;
+const APPROVED_LEGACY_SOPS_PATH = /^secrets\/.+\.sops\.env$/u;
+const APPROVED_ENV_CIPHERTEXT = /^env\/enc\/(?:dev|prod)\.env\.enc$/u;
 const SECRET_DOCUMENT = /^secrets\/(?:README\.md|\.gitkeep)$/u;
 const DOTENV_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 const SOPS_ENCRYPTED_VALUE = /^ENC\[[^\r\n]+\]$/u;
@@ -43,11 +46,36 @@ function finding(path, rule, detail) {
   return { path, rule, detail };
 }
 
+function isSopsArtifactPath(path) {
+  return LEGACY_SOPS_SUFFIX.test(path) || ENV_CIPHERTEXT_SUFFIX.test(path);
+}
+
+function isApprovedSopsPath(path) {
+  return (
+    APPROVED_LEGACY_SOPS_PATH.test(path) ||
+    APPROVED_ENV_CIPHERTEXT.test(path)
+  );
+}
+
+function isDotenvExample(name) {
+  return (
+    [".env.example", ".env.sample", ".env.template"].includes(name) ||
+    /\.(?:example|sample|template)\.env$/u.test(name) ||
+    /\.env\.(?:example|sample|template)$/u.test(name)
+  );
+}
+
 export function isPlaintextDotenvPath(path) {
-  const name = basename(path);
-  if (name === ".env.example" || name === ".env.sample") return false;
-  if (SOPS_SUFFIX.test(name)) return false;
-  return name === ".env" || name.startsWith(".env.");
+  const normalized = normalizePath(path);
+  const name = basename(normalized);
+  if (isDotenvExample(name)) return false;
+  if (SOPS_CONFIG.test(normalized) || isSopsArtifactPath(normalized)) return false;
+  return (
+    normalized.startsWith("env/dec/") ||
+    name === ".env" ||
+    name.startsWith(".env.") ||
+    name.endsWith(".env")
+  );
 }
 
 function validAgeEnvelope(value) {
@@ -181,26 +209,47 @@ export async function scanTrackedRepository(rootInput) {
       );
     }
 
-    if (SOPS_SUFFIX.test(trackedPath) && !trackedPath.startsWith("secrets/")) {
+    if (
+      isSopsArtifactPath(trackedPath) &&
+      !SOPS_CONFIG.test(trackedPath) &&
+      !isApprovedSopsPath(trackedPath) &&
+      !trackedPath.startsWith("secrets/") &&
+      !trackedPath.startsWith("env/enc/")
+    ) {
       findings.push(
         finding(
           trackedPath,
-          "sops-outside-secrets",
-          "SOPS artifacts are allowed only below secrets/",
+          "sops-outside-approved-path",
+          "SOPS artifacts must use secrets/*.sops.env or env/enc/dev|prod.env.enc",
+        ),
+      );
+    }
+
+    if (trackedPath.startsWith("env/enc/") && !APPROVED_ENV_CIPHERTEXT.test(trackedPath)) {
+      findings.push(
+        finding(
+          trackedPath,
+          isSopsArtifactPath(trackedPath)
+            ? "noncanonical-encrypted-env"
+            : "unencrypted-secret-path",
+          "env/enc accepts only validated dev.env.enc and prod.env.enc ciphertext",
         ),
       );
     }
 
     if (trackedPath.startsWith("secrets/") && !SECRET_DOCUMENT.test(trackedPath)) {
-      if (SOPS_SUFFIX.test(trackedPath) && !APPROVED_SOPS_PATH.test(trackedPath)) {
+      if (
+        isSopsArtifactPath(trackedPath) &&
+        !APPROVED_LEGACY_SOPS_PATH.test(trackedPath)
+      ) {
         findings.push(
           finding(
             trackedPath,
             "unsupported-sops-format",
-            "the age pilot validates only .sops.env artifacts",
+            "legacy secrets paths validate only .sops.env artifacts",
           ),
         );
-      } else if (!APPROVED_SOPS_PATH.test(trackedPath)) {
+      } else if (!APPROVED_LEGACY_SOPS_PATH.test(trackedPath)) {
         findings.push(
           finding(
             trackedPath,
@@ -250,7 +299,7 @@ export async function scanTrackedRepository(rootInput) {
     const bytes = await readFile(absolutePath);
     const content = bytes.toString("utf8");
 
-    if (APPROVED_SOPS_PATH.test(trackedPath) && !validateSopsDotenv(content)) {
+    if (isApprovedSopsPath(trackedPath) && !validateSopsDotenv(content)) {
       findings.push(
         finding(
           trackedPath,
@@ -260,14 +309,18 @@ export async function scanTrackedRepository(rootInput) {
       );
     }
 
-    for (const rule of sensitiveTextRules(bytes.toString("latin1"))) {
-      findings.push(
-        finding(
-          trackedPath,
-          rule,
-          "sensitive material must not be tracked",
-        ),
-      );
+    // Strict SOPS validation already proves that user values are ciphertext.
+    // Scan every other tracked text/binary file for credential signatures.
+    if (!isApprovedSopsPath(trackedPath)) {
+      for (const rule of sensitiveTextRules(bytes.toString("latin1"))) {
+        findings.push(
+          finding(
+            trackedPath,
+            rule,
+            "sensitive material must not be tracked",
+          ),
+        );
+      }
     }
   }
 

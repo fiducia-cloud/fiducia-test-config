@@ -50,7 +50,10 @@ function rules(findings) {
 
 test("classifies plaintext dotenv names without rejecting examples or SOPS artifacts", () => {
   assert.equal(isPlaintextDotenvPath("deploy/customer/.env.production"), true);
+  assert.equal(isPlaintextDotenvPath("config/service.env"), true);
   assert.equal(isPlaintextDotenvPath(".env.example"), false);
+  assert.equal(isPlaintextDotenvPath("fixtures/service.env.template"), false);
+  assert.equal(isPlaintextDotenvPath("env/enc/dev.env.enc"), false);
   assert.equal(isPlaintextDotenvPath("secrets/customer/dev.sops.env"), false);
   assert.equal(isPlaintextDotenvPath(".envrc"), false);
 });
@@ -96,27 +99,43 @@ test("detects credential families but returns rule names rather than values", ()
   );
 });
 
-test("accepts placeholders and strictly valid age/SOPS dotenv files", async () => {
+test("accepts root SOPS config plus canonical and legacy encrypted dotenv paths", async () => {
   const root = await repository({
+    ".sops.yaml": "creation_rules: []\n",
     ".env.example": "DATABASE_URL=\nTOKEN=replace-me\n",
+    "env/README.md": "Only ciphertext is tracked.\n",
+    "env/enc/dev.env.enc": sopsDotenv(),
     "secrets/README.md": "No plaintext values.\n",
     "secrets/customer/dev.sops.env": sopsDotenv(),
   });
   assert.deepEqual(await scanTrackedRepository(root), []);
 });
 
-test("rejects plaintext values hidden beside valid-looking SOPS metadata", async () => {
+test("canonical env ciphertext supports dev and prod but rejects local aliases", async () => {
   const root = await repository({
-    "secrets/customer/dev.sops.env": sopsDotenv("plaintext-value"),
+    "env/enc/dev.env.enc": sopsDotenv(),
+    "env/enc/prod.env.enc": sopsDotenv(),
+    "env/enc/local.env.enc": sopsDotenv(),
+  });
+
+  assert.deepEqual(rules(await scanTrackedRepository(root)), [
+    "noncanonical-encrypted-env",
+  ]);
+});
+
+test("rejects plaintext values hidden beside valid-looking canonical SOPS metadata", async () => {
+  const root = await repository({
+    "env/enc/dev.env.enc": sopsDotenv("plaintext-value"),
   });
   assert.deepEqual(rules(await scanTrackedRepository(root)), [
     "invalid-sops-dotenv",
   ]);
 });
 
-test("rejects SOPS files outside secrets and unsupported formats inside it", async () => {
+test("rejects unapproved SOPS paths and unsupported legacy formats", async () => {
   const root = await repository({
     "deploy/customer/dev.sops.env": sopsDotenv(),
+    "env/enc/local.env.enc": sopsDotenv(),
     "secrets/customer/dev.sops.json": JSON.stringify({
       token: "plaintext",
       sops: { mac: "ENC[fixture]", version: "3.13.3" },
@@ -124,8 +143,20 @@ test("rejects SOPS files outside secrets and unsupported formats inside it", asy
   });
   assert.deepEqual(
     new Set(rules(await scanTrackedRepository(root))),
-    new Set(["sops-outside-secrets", "unsupported-sops-format"]),
+    new Set([
+      "sops-outside-approved-path",
+      "noncanonical-encrypted-env",
+      "unsupported-sops-format",
+    ]),
   );
+});
+
+test("root SOPS configuration remains subject to credential-signature scanning", async () => {
+  const root = await repository({
+    ".sops.yaml": "comment: -----BEGIN " + "PRIVATE KEY-----\n",
+  });
+
+  assert.deepEqual(rules(await scanTrackedRepository(root)), ["pem-private-key"]);
 });
 
 test("rejects plaintext, unencrypted secret paths, and malformed SOPS files", async () => {
@@ -147,6 +178,16 @@ test("rejects plaintext, unencrypted secret paths, and malformed SOPS files", as
     JSON.stringify(findings).includes("do-not-print-this-value"),
     false,
   );
+});
+
+test("rejects arbitrary plaintext files placed under env/enc", async () => {
+  const root = await repository({
+    "env/enc/notes.txt": "TOKEN=fixture\n",
+  });
+
+  assert.deepEqual(rules(await scanTrackedRepository(root)), [
+    "unencrypted-secret-path",
+  ]);
 });
 
 test("scans credentials in NUL-containing tracked files", async () => {

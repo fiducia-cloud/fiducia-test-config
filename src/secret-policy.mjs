@@ -89,8 +89,16 @@ export function validateSopsDotenv(content) {
   if (typeof content !== "string" || content.includes("\0")) return false;
 
   const entries = new Map();
+  let encryptedComments = 0;
   for (const line of content.split(/\r?\n/u)) {
-    if (line.trim() === "" || line.startsWith("#")) continue;
+    if (line.trim() === "") continue;
+    if (line.startsWith("#")) {
+      // SOPS encrypts dotenv comments as `#ENC[...]`. Treat them as real
+      // encrypted payload rather than blindly skipping arbitrary plaintext.
+      if (!SOPS_ENCRYPTED_VALUE.test(line.slice(1))) return false;
+      encryptedComments += 1;
+      continue;
+    }
     const separator = line.indexOf("=");
     if (separator <= 0) return false;
     const key = line.slice(0, separator);
@@ -144,7 +152,7 @@ export function validateSopsDotenv(content) {
   }
 
   if (
-    encryptedValues === 0 ||
+    encryptedValues + encryptedComments === 0 ||
     !entries.has("sops_mac") ||
     !entries.has("sops_version") ||
     age.size === 0

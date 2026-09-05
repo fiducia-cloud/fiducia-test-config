@@ -6,7 +6,9 @@
   "description": "Shared browser-test harness + config presets for fiducia.cloud. Exports config/helpers only — each repo keeps its own specs. Playwright and Puppeteer are used as libraries under node --test.",
   "scripts": {
     "test": "node --test tests/*.test.mjs",
-    "check:secrets": "node scripts/check-secret-policy.mjs"
+    "check:secrets": "node scripts/check-secret-policy.mjs",
+    "lint:ores": "if [ -f .ores-lint/lint.sh ]; then sh .ores-lint/lint.sh; else echo 'ores-lint not installed'; fi",
+    "prepublishOnly": "npm run lint:ores"
   },
   "exports": {
     "./harness": "./src/harness.mjs",
@@ -21,5 +23,13 @@
     "src",
     "tsconfig.base.json",
     "eslint.config.base.mjs"
-  ]
+  ],
+  "oresLint": {
+    "note": "Declared, not installed. ores-lint resolves these from a global install - see .ores-lint/README.md",
+    "requires": {
+      "eslint": ">=9",
+      "typescript-eslint": ">=8 (optional; without it .ts files are skipped)"
+    },
+    "install": "npm i -g eslint typescript-eslint"
+  }
 }

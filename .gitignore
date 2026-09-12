@@ -57,3 +57,6 @@ env/dec
 # Re-assert the narrow, pre-existing exception above so the broad rules do not
 # swallow it (deny by default, permit narrowly).
 !secrets/**/*.sops.env
+
+# Sanctioned scratch locations - AGENTS.md requires both, trailing-slash form
+temp/
